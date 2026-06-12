@@ -303,6 +303,129 @@ ai.import_ollama(["mistral:7b", "llama3:8b"])  # selective
 
 ---
 
+## HuggingFace Search & Uploads
+
+```python
+# Search HuggingFace for models
+hits = ai.hf_search("mistral", sort="downloads", gguf=True)
+for m in hits:
+    print(m["id"], m.get("downloads"))
+
+# Upload a local GGUF to the server
+ai.upload("/path/to/model.gguf")
+
+# Detailed local-model metadata
+ai.model_info("llm/mistral:7b")
+```
+
+---
+
+## Chat History
+
+```python
+ai.history(n=20)        # recent generation history
+ai.history_clear()      # wipe it
+
+ai.chats()              # saved conversations
+ai.chat_get("conv-id")  # one conversation
+ai.chat_delete("conv-id")
+```
+
+---
+
+## Skills, MCP & Agentic Tools
+
+```python
+# Skills
+ai.skills()
+ai.skill_create("translate", "Translate to Italian", "You translate text to Italian.")
+ai.skill_delete("translate")
+
+# MCP servers
+ai.mcp_servers()
+ai.mcp_add({"name": "fs", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]})
+ai.mcp_enable("fs", True)
+ai.mcp_remove("fs")
+
+# Agentic generate (tools + autonomous loop)
+result = ai.generate(
+    "llm/mistral:7b",
+    "What time is it and what is 17*23?",
+    agentic={"builtins": True, "auto": True},
+)
+
+# Approve / answer pending agentic prompts (from a streaming run)
+ai.agentic_approve("req-id", approved=True)
+ai.agentic_answer("req-id", "yes, use Postgres")
+```
+
+---
+
+## Code Execution & File Browse
+
+```python
+# Run code in a sandbox (python, js, bash, powershell, go, ruby, php, java, c, cpp, ...)
+out = ai.run_code("python", "print(2 ** 10)")
+print(out["output"])          # "1024"
+
+# Browse the server's filesystem
+ai.fs_list("/home/user")       # entries; empty path → drive roots
+ai.fs_read("/home/user/notes.txt")
+```
+
+---
+
+## Cloud & Proxy Providers
+
+```python
+# Bring-your-own-key cloud LLMs
+ai.cloud_providers()
+ai.cloud_key("openai", "sk-...")
+ai.cloud_chat("openai", "gpt-4o", "Hello!")
+
+# Vortelio managed cloud proxy
+ai.proxy_models()
+ai.proxy_chat("gpt-4o", "Hello!")
+ai.proxy_usage()
+
+# Cloud media providers
+ai.media_providers()
+ai.media_key("replicate", "r8_...")
+```
+
+---
+
+## OpenAI-Compatible Media
+
+```python
+# Text-to-speech → saves speech.wav and returns bytes
+ai.openai_speech("audio/kokoro:latest", "Hello world", "speech.wav")
+
+# Image generation (OpenAI format)
+res = ai.openai_image("image/sdxl:latest", "a neon city", response_format="b64_json")
+
+# Speech translation to English
+text = ai.translate("clip.wav")
+```
+
+---
+
+## Server Config & Updates
+
+```python
+ai.config()                          # current server config
+ai.set_config({"theme": "dark"})
+
+ai.update_check()                    # is a newer server available?
+ai.update_start(restart=True)        # download + apply
+ai.shutdown()                        # stop the server
+
+ai.metrics()                         # Prometheus metrics text
+ai.openapi()                         # full endpoint schema
+```
+
+---
+
 ## Custom Port / Remote Server
 
 ```python
@@ -315,7 +438,7 @@ ai = Vortelio(timeout=600)             # longer timeout for large models
 
 ## Server Version Compatibility
 
-This SDK version **0.3.49** requires Vortelio server **≥ 0.3.38**.
+This SDK version **6.1.0** requires Vortelio server **≥ 0.3.49**.
 
 ---
 

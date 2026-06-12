@@ -45,6 +45,31 @@ def _request(
         raise VortElioError(exc.code, msg) from exc
 
 
+def _request_bytes(
+    method: str,
+    url: str,
+    body: Optional[Dict[str, Any]] = None,
+    timeout: int = 300,
+) -> bytes:
+    """Like _request but returns the raw response body (for binary endpoints)."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            msg = json.loads(exc.read()).get("error", exc.reason)
+        except Exception:
+            msg = exc.reason
+        raise VortElioError(exc.code, msg) from exc
+
+
 def _stream_ndjson(
     url: str,
     body: Dict[str, Any],

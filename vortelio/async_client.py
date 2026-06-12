@@ -108,6 +108,26 @@ class AsyncVortelio:
                     raise AsyncVortElioError(resp.status, err.get("error", ""))
                 return await resp.json()
 
+    async def _get_q(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if params:
+            import urllib.parse
+            clean = {k: v for k, v in params.items() if v is not None}
+            if clean:
+                path = path + "?" + urllib.parse.urlencode(clean)
+        return await self._get(path)
+
+    async def _delete_json(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                self._url(path), json=body or {},
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+            ) as resp:
+                if resp.status >= 400:
+                    raise AsyncVortElioError(resp.status, "request failed")
+                raw = await resp.read()
+                return json.loads(raw) if raw else {}
+
     async def _stream_ndjson(
         self,
         path: str,
@@ -427,6 +447,45 @@ class AsyncVortelio:
             "model": model, "collection": collection, "query": query, "top_k": top_k,
         })
 
+    # ── Media generation ──────────────────────────────────────────────────────
+
+    async def _generate_media(
+        self, model: str, prompt: str, output_file: Optional[str], *,
+        steps: int = 20, silent: bool = False,
+    ) -> bytes:
+        body: Dict[str, Any] = {"model": model, "prompt": prompt, "steps": steps, "stream": True}
+        if output_file:
+            body["output_file"] = output_file
+        result_data: bytes = b""
+        async for evt in self._stream_sse("/api/generate", body):
+            event = evt.get("_event", "message")
+            if event == "progress" and not silent:
+                print(f"\r  {model}: {evt.get('pct', 0):3d}%  {evt.get('msg', '')}   ", end="", flush=True)
+            elif event == "result":
+                if not silent:
+                    print()
+                b64 = evt.get("data", "")
+                result_data = base64.b64decode(b64) if b64 else b""
+            elif event == "error":
+                raise AsyncVortElioError(500, evt.get("error", "generation failed"))
+        return result_data
+
+    async def generate_image(self, model: str, prompt: str, output_file: Optional[str] = None, *, steps: int = 20, silent: bool = False) -> bytes:
+        """Generate an image. Returns PNG bytes."""
+        return await self._generate_media(model, prompt, output_file, steps=steps, silent=silent)
+
+    async def generate_audio(self, model: str, prompt: str, output_file: Optional[str] = None, *, steps: int = 20, silent: bool = False) -> bytes:
+        """Generate audio (TTS/music). Returns WAV bytes."""
+        return await self._generate_media(model, prompt, output_file, steps=steps, silent=silent)
+
+    async def generate_video(self, model: str, prompt: str, output_file: Optional[str] = None, *, steps: int = 20, silent: bool = False) -> bytes:
+        """Generate a video. Returns MP4 bytes."""
+        return await self._generate_media(model, prompt, output_file, steps=steps, silent=silent)
+
+    async def generate_3d(self, model: str, prompt: str, output_file: Optional[str] = None, *, steps: int = 20, silent: bool = False) -> bytes:
+        """Generate a 3D object. Returns OBJ bytes."""
+        return await self._generate_media(model, prompt, output_file, steps=steps, silent=silent)
+
     # ── Agents ────────────────────────────────────────────────────────────────
 
     async def agents_catalog(self) -> List[Dict[str, Any]]:
@@ -488,6 +547,169 @@ class AsyncVortelio:
 
     async def openai_models(self) -> List[Dict[str, Any]]:
         return (await self._get("/v1/models")).get("data", [])
+
+    # ── Lifecycle / config ────────────────────────────────────────────────────
+
+    async def update_check(self) -> Dict[str, Any]:
+        return await self._get("/api/update/check")
+
+    async def update_start(self, *, force: bool = False, restart: bool = True) -> Dict[str, Any]:
+        return await self._post("/api/update/start", {"force": force, "restart": restart})
+
+    async def shutdown(self) -> Dict[str, Any]:
+        return await self._post("/api/shutdown", {})
+
+    async def config(self) -> Dict[str, Any]:
+        return await self._get("/api/config")
+
+    async def set_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._post("/api/config", config)
+
+    # ── Models ────────────────────────────────────────────────────────────────
+
+    async def model_info(self, model: str) -> Dict[str, Any]:
+        return await self._post("/api/models/info", {"model": model})
+
+    async def model_remove(self, model: str) -> Dict[str, Any]:
+        return await self._post("/api/models/remove", {"model": model})
+
+    async def hf_search(
+        self, query: str = "", *, sort: str = "downloads", gguf: Optional[bool] = None
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"q": query, "sort": sort}
+        if gguf is not None:
+            params["gguf"] = "true" if gguf else "false"
+        return (await self._get_q("/api/hf/search", params)).get("models", [])
+
+    async def ollama_models(self, url: str = "http://localhost:11434") -> Dict[str, Any]:
+        return await self._get_q("/api/ollama/models", {"url": url})
+
+    # ── History / chats ───────────────────────────────────────────────────────
+
+    async def history(self, n: int = 50) -> List[Dict[str, Any]]:
+        return (await self._get_q("/api/history", {"n": n})).get("history", [])
+
+    async def history_clear(self) -> Dict[str, Any]:
+        return await self._delete_json("/api/history")
+
+    async def chats(self) -> List[Dict[str, Any]]:
+        result = await self._get("/api/chats")
+        return result.get("chats", result.get("conversations", []))
+
+    async def chat_get(self, chat_id: str) -> Dict[str, Any]:
+        return await self._get(f"/api/chats/{chat_id}")
+
+    async def chat_delete(self, chat_id: str) -> Dict[str, Any]:
+        return await self._delete_json(f"/api/chats/{chat_id}")
+
+    # ── Code / skills / fs ────────────────────────────────────────────────────
+
+    async def run_code(self, language: str, code: str) -> Dict[str, Any]:
+        return await self._post("/api/run-code", {"language": language, "code": code})
+
+    async def skills(self) -> List[Dict[str, Any]]:
+        return (await self._get("/api/skills")).get("skills", [])
+
+    async def skill_create(
+        self, name: str, description: str, body: str, *, skill_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"name": name, "description": description, "body": body}
+        if skill_id:
+            payload["id"] = skill_id
+        return await self._post("/api/skills", payload)
+
+    async def skill_delete(self, skill_id: str) -> Dict[str, Any]:
+        return await self._post("/api/skills/delete", {"id": skill_id})
+
+    async def fs_list(self, path: str = "") -> Dict[str, Any]:
+        return await self._get_q("/api/fs/list", {"path": path})
+
+    async def fs_read(self, path: str) -> Dict[str, Any]:
+        return await self._get_q("/api/fs/read", {"path": path})
+
+    # ── MCP ───────────────────────────────────────────────────────────────────
+
+    async def mcp_servers(self) -> List[Dict[str, Any]]:
+        return (await self._get("/api/mcp/servers")).get("servers", [])
+
+    async def mcp_add(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._post("/api/mcp/servers", config)
+
+    async def mcp_enable(self, name: str, enabled: bool = True) -> Dict[str, Any]:
+        return await self._post("/api/mcp/enable", {"name": name, "enabled": enabled})
+
+    async def mcp_remove(self, name: str) -> Dict[str, Any]:
+        return await self._post("/api/mcp/remove", {"name": name})
+
+    # ── Agents (extended) / agentic ───────────────────────────────────────────
+
+    async def agents_uninstall(self, agent_id: str) -> Dict[str, Any]:
+        return await self._post("/api/agents/uninstall", {"agent": agent_id})
+
+    async def agents_check(self, url: str) -> Dict[str, Any]:
+        return await self._post("/api/agents/check", {"url": url})
+
+    async def agents_health(self, agent_id: str) -> Dict[str, Any]:
+        return await self._get_q("/api/agents/health", {"id": agent_id})
+
+    async def agentic_approve(self, request_id: str, approved: bool = True) -> Dict[str, Any]:
+        return await self._post("/api/agentic/approve", {"id": request_id, "approved": approved})
+
+    async def agentic_answer(self, request_id: str, answer: str) -> Dict[str, Any]:
+        return await self._post("/api/agentic/answer", {"id": request_id, "answer": answer})
+
+    # ── Cloud / proxy / media providers ───────────────────────────────────────
+
+    async def cloud_providers(self) -> Dict[str, Any]:
+        return await self._get("/api/cloud/providers")
+
+    async def cloud_chat(
+        self, provider: str, model: str, messages: Union[List[Dict[str, Any]], str],
+        *, system: Optional[str] = None, agentic: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        body: Dict[str, Any] = {"provider": provider, "model": model, "messages": messages}
+        if system:
+            body["system"] = system
+        if agentic:
+            body["agentic"] = agentic
+        return await self._post("/api/cloud/chat", body)
+
+    async def proxy_models(self) -> List[Dict[str, Any]]:
+        return (await self._get("/api/proxy/models")).get("models", [])
+
+    async def proxy_chat(
+        self, model: str, messages: Union[List[Dict[str, Any]], str], **kwargs: Any
+    ) -> Dict[str, Any]:
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        return await self._post("/api/proxy/chat", {"model": model, "messages": messages, "stream": False, **kwargs})
+
+    async def proxy_usage(self) -> Dict[str, Any]:
+        return await self._get("/api/proxy/usage")
+
+    async def media_providers(self) -> List[Dict[str, Any]]:
+        return (await self._get("/api/media/providers")).get("providers", [])
+
+    async def media_key(self, provider: str, key: str) -> Dict[str, Any]:
+        return await self._post("/api/media/key", {"provider": provider, "key": key})
+
+    # ── Auth / user ───────────────────────────────────────────────────────────
+
+    async def auth_status(self) -> Dict[str, Any]:
+        return await self._get("/api/auth/status")
+
+    async def user_profile(self) -> Dict[str, Any]:
+        return await self._get("/api/user/profile")
+
+    async def user_settings(self, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if settings is None:
+            return await self._get("/api/user/settings")
+        return await self._post("/api/user/settings", settings)
+
+    async def apikeys(self) -> Dict[str, Any]:
+        return await self._get("/api/user/apikeys")
 
     def __repr__(self) -> str:
         return f"AsyncVortelio(base={self._base!r})"

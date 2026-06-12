@@ -7,7 +7,7 @@ import os
 import sys
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Union
 
-from ._http import VortElioError, _request, _stream_ndjson, _stream_sse
+from ._http import VortElioError, _request, _request_bytes, _stream_ndjson, _stream_sse
 
 
 class Conversation:
@@ -107,6 +107,15 @@ class Vortelio:
 
     def _patch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         return _request("PATCH", self._url(path), body=body, timeout=self._timeout)
+
+    def _get_q(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """GET with optional query parameters (None values dropped)."""
+        if params:
+            import urllib.parse
+            clean = {k: v for k, v in params.items() if v is not None}
+            if clean:
+                path = path + "?" + urllib.parse.urlencode(clean)
+        return self._get(path)
 
     # ── Server info ───────────────────────────────────────────────────────────
 
@@ -282,6 +291,10 @@ class Vortelio:
         think: bool = False,
         raw: bool = False,
         context: Optional[List[int]] = None,
+        suffix: Optional[str] = None,
+        template: Optional[str] = None,
+        context_size: Optional[int] = None,
+        agentic: Optional[Dict[str, Any]] = None,
         on_token: Optional[Callable[[str], None]] = None,
         silent: bool = False,
     ) -> Dict[str, Any]:
@@ -306,6 +319,14 @@ class Vortelio:
             body["raw"] = True
         if context:
             body["context"] = context
+        if suffix:
+            body["suffix"] = suffix
+        if template:
+            body["template"] = template
+        if context_size:
+            body["context_size"] = context_size
+        if agentic:
+            body["agentic"] = agentic
 
         return self._post("/api/generate", body)
 
@@ -978,6 +999,371 @@ class Vortelio:
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             result = json.loads(resp.read())
         return result.get("text", "")
+
+    # ── Lifecycle / updates ───────────────────────────────────────────────────
+
+    def update_check(self) -> Dict[str, Any]:
+        """Check whether a newer Vortelio server version is available."""
+        return self._get("/api/update/check")
+
+    def update_start(self, *, force: bool = False, restart: bool = True) -> Dict[str, Any]:
+        """Download and apply a server update."""
+        return self._post("/api/update/start", {"force": force, "restart": restart})
+
+    def shutdown(self) -> Dict[str, Any]:
+        """Gracefully shut down the Vortelio server."""
+        return self._post("/api/shutdown", {})
+
+    def metrics(self) -> str:
+        """Prometheus metrics text from /metrics."""
+        import urllib.request
+        with urllib.request.urlopen(self._url("/metrics"), timeout=self._timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    def openapi(self) -> Dict[str, Any]:
+        """Full OpenAPI schema describing every server endpoint."""
+        return self._get("/openapi.json")
+
+    def config(self) -> Dict[str, Any]:
+        """Current server configuration."""
+        return self._get("/api/config")
+
+    def set_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Update server configuration. Returns the saved config."""
+        return self._post("/api/config", config)
+
+    # ── Model discovery / management ──────────────────────────────────────────
+
+    def model_info(self, model: str) -> Dict[str, Any]:
+        """Detailed metadata for a local model."""
+        return self._post("/api/models/info", {"model": model})
+
+    def model_remove(self, model: str) -> Dict[str, Any]:
+        """Remove a local model (alias of delete, returns server reply)."""
+        return self._post("/api/models/remove", {"model": model})
+
+    def hf_search(
+        self,
+        query: str = "",
+        *,
+        sort: str = "downloads",
+        gguf: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search HuggingFace for models.
+        sort: "downloads" | "likes" | "recent" | "trending"
+        """
+        params: Dict[str, Any] = {"q": query, "sort": sort}
+        if gguf is not None:
+            params["gguf"] = "true" if gguf else "false"
+        return self._get_q("/api/hf/search", params).get("models", [])
+
+    def ollama_models(self, url: str = "http://localhost:11434") -> Dict[str, Any]:
+        """List models from a running Ollama instance (for import)."""
+        return self._get_q("/api/ollama/models", {"url": url})
+
+    def push(self, model: str) -> Dict[str, Any]:
+        """Push a model to a registry (not supported server-side — raises 501)."""
+        return self._post("/api/push", {"model": model})
+
+    def upload(self, file_path: str) -> Dict[str, Any]:
+        """Upload a local GGUF / model file to the server (multipart)."""
+        return self._multipart("/api/upload", file_path, field="file")
+
+    # ── Chat history ──────────────────────────────────────────────────────────
+
+    def history(self, n: int = 50) -> List[Dict[str, Any]]:
+        """Recent generation history entries."""
+        return self._get_q("/api/history", {"n": n}).get("history", [])
+
+    def history_clear(self) -> Dict[str, Any]:
+        """Clear all stored generation history."""
+        return self._delete("/api/history", {})
+
+    def chats(self) -> List[Dict[str, Any]]:
+        """List saved chat conversations."""
+        result = self._get("/api/chats")
+        return result.get("chats", result.get("conversations", []))
+
+    def chat_get(self, chat_id: str) -> Dict[str, Any]:
+        """Fetch a single saved conversation by ID."""
+        return self._get(f"/api/chats/{chat_id}")
+
+    def chat_delete(self, chat_id: str) -> Dict[str, Any]:
+        """Delete a saved conversation by ID."""
+        return self._delete(f"/api/chats/{chat_id}", {})
+
+    # ── Code execution ────────────────────────────────────────────────────────
+
+    def run_code(self, language: str, code: str) -> Dict[str, Any]:
+        """
+        Execute a code snippet in a sandbox. Returns {'ok': bool, 'output': str}.
+        language: python, javascript, bash, powershell, go, ruby, php, perl, java, c, cpp...
+        """
+        return self._post("/api/run-code", {"language": language, "code": code})
+
+    # ── Skills ────────────────────────────────────────────────────────────────
+
+    def skills(self) -> List[Dict[str, Any]]:
+        """List available agent skills."""
+        return self._get("/api/skills").get("skills", [])
+
+    def skill_create(
+        self,
+        name: str,
+        description: str,
+        body: str,
+        *,
+        skill_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a custom skill."""
+        payload: Dict[str, Any] = {"name": name, "description": description, "body": body}
+        if skill_id:
+            payload["id"] = skill_id
+        return self._post("/api/skills", payload)
+
+    def skill_delete(self, skill_id: str) -> Dict[str, Any]:
+        """Delete a custom skill by ID."""
+        return self._post("/api/skills/delete", {"id": skill_id})
+
+    # ── File system browse ────────────────────────────────────────────────────
+
+    def fs_list(self, path: str = "") -> Dict[str, Any]:
+        """List directory contents (empty path returns drive roots)."""
+        return self._get_q("/api/fs/list", {"path": path})
+
+    def fs_read(self, path: str) -> Dict[str, Any]:
+        """Read a text file. Returns {'content': str, 'truncated': bool}."""
+        return self._get_q("/api/fs/read", {"path": path})
+
+    # ── MCP servers ───────────────────────────────────────────────────────────
+
+    def mcp_servers(self) -> List[Dict[str, Any]]:
+        """List configured MCP servers."""
+        return self._get("/api/mcp/servers").get("servers", [])
+
+    def mcp_add(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Add an MCP server. config: {name, command, args, env, ...}."""
+        return self._post("/api/mcp/servers", config)
+
+    def mcp_enable(self, name: str, enabled: bool = True) -> Dict[str, Any]:
+        """Enable or disable an MCP server."""
+        return self._post("/api/mcp/enable", {"name": name, "enabled": enabled})
+
+    def mcp_remove(self, name: str) -> Dict[str, Any]:
+        """Remove an MCP server by name."""
+        return self._post("/api/mcp/remove", {"name": name})
+
+    # ── Agents (extended) ─────────────────────────────────────────────────────
+
+    def agents_uninstall(self, agent_id: str) -> Dict[str, Any]:
+        """Uninstall an agent by ID."""
+        return self._post("/api/agents/uninstall", {"agent": agent_id})
+
+    def agents_check(self, url: str) -> Dict[str, Any]:
+        """Probe an agent endpoint URL for reachability."""
+        return self._post("/api/agents/check", {"url": url})
+
+    def agents_health(self, agent_id: str) -> Dict[str, Any]:
+        """Health check for a running agent."""
+        return self._get_q("/api/agents/health", {"id": agent_id})
+
+    # ── Agentic loop control ──────────────────────────────────────────────────
+
+    def agentic_approve(self, request_id: str, approved: bool = True) -> Dict[str, Any]:
+        """Approve or reject a pending agentic tool call."""
+        return self._post("/api/agentic/approve", {"id": request_id, "approved": approved})
+
+    def agentic_answer(self, request_id: str, answer: str) -> Dict[str, Any]:
+        """Answer a clarifying question raised by an agentic run."""
+        return self._post("/api/agentic/answer", {"id": request_id, "answer": answer})
+
+    # ── Cloud / proxy / media providers ───────────────────────────────────────
+
+    def cloud_providers(self) -> Dict[str, Any]:
+        """List cloud LLM providers and key status."""
+        return self._get("/api/cloud/providers")
+
+    def cloud_key(
+        self,
+        provider: Optional[str] = None,
+        keys: Optional[Union[str, List[str]]] = None,
+    ) -> Dict[str, Any]:
+        """Get cloud keys (no args) or set keys for a provider."""
+        if provider is None and keys is None:
+            return self._get("/api/cloud/key")
+        body: Dict[str, Any] = {"provider": provider}
+        if keys is not None:
+            body["keys"] = keys if isinstance(keys, list) else [keys]
+        return self._post("/api/cloud/key", body)
+
+    def cloud_chat(
+        self,
+        provider: str,
+        model: str,
+        messages: Union[List[Dict[str, Any]], str],
+        *,
+        system: Optional[str] = None,
+        agentic: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Chat through a configured cloud provider."""
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        body: Dict[str, Any] = {"provider": provider, "model": model, "messages": messages}
+        if system:
+            body["system"] = system
+        if agentic:
+            body["agentic"] = agentic
+        return self._post("/api/cloud/chat", body)
+
+    def proxy_models(self) -> List[Dict[str, Any]]:
+        """List models available through the Vortelio cloud proxy."""
+        return self._get("/api/proxy/models").get("models", [])
+
+    def proxy_chat(
+        self,
+        model: str,
+        messages: Union[List[Dict[str, Any]], str],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Chat via the Vortelio cloud proxy (non-streaming)."""
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        return self._post("/api/proxy/chat", {"model": model, "messages": messages, "stream": False, **kwargs})
+
+    def proxy_usage(self) -> Dict[str, Any]:
+        """Cloud proxy usage / quota stats."""
+        return self._get("/api/proxy/usage")
+
+    def media_providers(self) -> List[Dict[str, Any]]:
+        """List cloud media-generation providers and key status."""
+        return self._get("/api/media/providers").get("providers", [])
+
+    def media_key(self, provider: str, key: str) -> Dict[str, Any]:
+        """Set the API key for a cloud media provider."""
+        return self._post("/api/media/key", {"provider": provider, "key": key})
+
+    # ── Auth / user ───────────────────────────────────────────────────────────
+
+    def auth_status(self) -> Dict[str, Any]:
+        """Current authentication status."""
+        return self._get("/api/auth/status")
+
+    def auth_verify(self, token: str) -> Dict[str, Any]:
+        """Verify a Firebase/ID token with the server."""
+        return self._post("/api/auth/verify", {"token": token})
+
+    def user_profile(self) -> Dict[str, Any]:
+        """Signed-in user profile."""
+        return self._get("/api/user/profile")
+
+    def user_settings(self, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get user settings, or update them when `settings` is given."""
+        if settings is None:
+            return self._get("/api/user/settings")
+        return self._post("/api/user/settings", settings)
+
+    def apikeys(self) -> Dict[str, Any]:
+        """List the user's Vortelio API keys."""
+        return self._get("/api/user/apikeys")
+
+    # ── OpenAI-compatible media ───────────────────────────────────────────────
+
+    def openai_speech(
+        self,
+        model: str,
+        text: str,
+        output_file: Optional[str] = None,
+        *,
+        voice: str = "default",
+        response_format: str = "wav",
+        speed: float = 1.0,
+    ) -> bytes:
+        """POST /v1/audio/speech — text-to-speech. Returns audio bytes."""
+        body = {
+            "model": model,
+            "input": text,
+            "voice": voice,
+            "response_format": response_format,
+            "speed": speed,
+        }
+        data = _request_bytes("POST", self._url("/v1/audio/speech"), body, timeout=self._timeout)
+        if output_file:
+            with open(output_file, "wb") as f:
+                f.write(data)
+        return data
+
+    def openai_image(
+        self,
+        model: str,
+        prompt: str,
+        *,
+        n: int = 1,
+        size: str = "1024x1024",
+        response_format: str = "b64_json",
+    ) -> Dict[str, Any]:
+        """POST /v1/images/generations — OpenAI-compatible image generation."""
+        return self._post("/v1/images/generations", {
+            "model": model, "prompt": prompt, "n": n,
+            "size": size, "response_format": response_format,
+        })
+
+    def translate(
+        self,
+        audio_path: str,
+        *,
+        model: Optional[str] = None,
+    ) -> str:
+        """Translate speech audio to English text via /v1/audio/translations."""
+        return self._audio_multipart("/v1/audio/translations", audio_path, model=model)
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _multipart(self, path: str, file_path: str, *, field: str = "file") -> Dict[str, Any]:
+        import urllib.request
+        boundary = "----VortElioBoundary7MA4YWxkTrZu0gW"
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+        filename = os.path.basename(file_path)
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode() + file_data + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(
+            self._url(path), data=body, method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+
+    def _audio_multipart(
+        self, path: str, audio_path: str, *, model: Optional[str] = None,
+        language: Optional[str] = None,
+    ) -> str:
+        import urllib.request
+        boundary = "----VortElioFormBoundary7MA4YWxkTrZu0gW"
+        with open(audio_path, "rb") as f:
+            audio_data = f.read()
+        parts: List[bytes] = [(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(audio_path)}"\r\n'
+            f"Content-Type: audio/wav\r\n\r\n"
+        ).encode() + audio_data + b"\r\n"]
+        for name, val in (("model", model), ("language", language)):
+            if val:
+                parts.append((
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n{val}\r\n'
+                ).encode())
+        parts.append(f"--{boundary}--\r\n".encode())
+        req = urllib.request.Request(
+            self._url(path), data=b"".join(parts), method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            return json.loads(resp.read()).get("text", "")
 
     def __repr__(self) -> str:
         return f"Vortelio(base={self._base!r})"

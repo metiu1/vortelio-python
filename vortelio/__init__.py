@@ -57,7 +57,7 @@ from .setup import (
     is_server_running,
 )
 
-__version__ = "0.3.49"
+__version__ = "6.1.0"
 __author__ = "Vortelio Contributors"
 __license__ = "Apache-2.0"
 
