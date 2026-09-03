@@ -1,18 +1,50 @@
-# Vortelio Python SDK
+<h1 align="center">Vortelio Python SDK</h1>
 
-[![PyPI version](https://img.shields.io/pypi/v/vortelio.svg)](https://pypi.org/project/vortelio/)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+<p align="center">
+  <strong>One Python client for every local AI model you run — text, images, audio, video and 3D.</strong><br/>
+  Drop-in compatible with the OpenAI and Ollama APIs. Zero external dependencies.
+</p>
 
-Official Python client for [Vortelio](https://github.com/metiu1/Vortelio) — run LLMs, generate images, audio, video, and 3D models locally.
+<p align="center">
+  <a href="https://pypi.org/project/vortelio/"><img src="https://img.shields.io/pypi/v/vortelio.svg?style=flat-square" alt="PyPI version"/></a>
+  <a href="https://pypi.org/project/vortelio/"><img src="https://img.shields.io/pypi/dm/vortelio.svg?style=flat-square&color=blue" alt="Downloads"/></a>
+  <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square" alt="Python 3.8+"/>
+  <img src="https://img.shields.io/badge/dependencies-0-lightgrey?style=flat-square" alt="Zero dependencies"/>
+  <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License"/>
+</p>
 
-Zero external dependencies. Fully OpenAI API and Ollama API compatible.
+---
+
+## What it is
+
+The official Python client for [Vortelio](https://github.com/metiu1/Vortelio), the
+local AI platform. Vortelio runs the models on your own hardware; this SDK is how
+your code talks to them — chat and streaming, embeddings, RAG, image and video
+generation, text-to-speech, 3D, agents, MCP and sandboxed code execution, all behind
+one object.
+
+It speaks the **OpenAI** and **Ollama** wire formats, so code written against either
+one keeps working: change the base URL and your prompts stop leaving the machine.
+And it installs clean — the sync client imports nothing outside the standard library.
 
 ```bash
 pip install vortelio
 ```
 
-For async support:
+```python
+from vortelio import Vortelio
+
+ai = Vortelio()                                     # http://localhost:11500
+
+ai.pull("llm/mistral:7b")                           # download a model
+print(ai.chat("llm/mistral:7b", "What is a lithophane?"))
+
+ai.image("image/sdxl:latest", "a red fox in the snow", "fox.png")
+wav = ai.generate_audio("audio/kokoro:latest", "Hello there")
+```
+
+Async support:
+
 ```bash
 pip install "vortelio[async]"   # adds aiohttp
 ```
