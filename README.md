@@ -1,8 +1,8 @@
 <h1 align="center">Vortelio Python SDK</h1>
 
 <p align="center">
-  <strong>One Python client for every local AI model you run — text, images, audio, video and 3D.</strong><br/>
-  Drop-in compatible with the OpenAI and Ollama APIs. Zero external dependencies.
+  <strong>Run AI on your own computer, from Python, in one line per task.</strong><br/>
+  Chat with a language model, generate an image, read a document, speak a sentence — without an API key, without a bill, without sending anything to anyone.
 </p>
 
 <p align="center">
@@ -10,22 +10,21 @@
   <a href="https://pypi.org/project/vortelio/"><img src="https://img.shields.io/pypi/dm/vortelio.svg?style=flat-square&color=blue" alt="Downloads"/></a>
   <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square" alt="Python 3.8+"/>
   <img src="https://img.shields.io/badge/dependencies-0-lightgrey?style=flat-square" alt="Zero dependencies"/>
-  <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License"/>
+  <img src="https://img.shields.io/badge/API-OpenAI%20%2B%20Ollama%20compatible-brightgreen?style=flat-square" alt="OpenAI and Ollama compatible"/>
 </p>
 
 ---
 
 ## What it is
 
-The official Python client for [Vortelio](https://github.com/metiu1/Vortelio), the
-local AI platform. Vortelio runs the models on your own hardware; this SDK is how
-your code talks to them — chat and streaming, embeddings, RAG, image and video
-generation, text-to-speech, 3D, agents, MCP and sandboxed code execution, all behind
-one object.
+[Vortelio](https://github.com/metiu1/Vortelio) is a program that runs AI models on your
+own machine — language models, image generation, speech, video, 3D. This package is how
+your Python code talks to it.
 
-It speaks the **OpenAI** and **Ollama** wire formats, so code written against either
-one keeps working: change the base URL and your prompts stop leaving the machine.
-And it installs clean — the sync client imports nothing outside the standard library.
+Normally, doing all of that means a different library for each thing: one for the LLM,
+another for Stable Diffusion, another for Whisper, each with its own install, its own
+GPU headaches and its own way of being called. Here it is one object with a method per
+task, and the models are already running.
 
 ```bash
 pip install vortelio
@@ -42,6 +41,26 @@ print(ai.chat("llm/mistral:7b", "What is a lithophane?"))
 ai.image("image/sdxl:latest", "a red fox in the snow", "fox.png")
 wav = ai.generate_audio("audio/kokoro:latest", "Hello there")
 ```
+
+## Who it is for
+
+- **People building with the OpenAI or Ollama API** who want to move off the cloud. The
+  SDK speaks both wire formats, so existing code keeps working — change the base URL and
+  your prompts stop leaving the machine.
+- **Anyone who cannot send data out**: client work, medical or legal documents, anything
+  under an NDA.
+- **Anyone tired of the bill**, or of a rate limit in the middle of a batch job.
+
+## Why this instead of calling the API by hand
+
+- **Zero dependencies.** The sync client imports nothing outside the standard library.
+  It will not drag half of PyPI into your project or fight your existing versions.
+- **One surface for everything** — chat and streaming, embeddings, RAG, images, video,
+  text-to-speech, 3D, agents, MCP and sandboxed code execution, all on the same object.
+- **Drop-in compatible** with OpenAI and Ollama clients, so migration is a URL change,
+  not a rewrite.
+- **It can start the server for you** (`ensure_server()`), so a script works on a fresh
+  machine without a manual step.
 
 Async support:
 
